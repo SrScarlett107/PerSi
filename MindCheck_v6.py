@@ -1,4 +1,5 @@
 
+
 from datetime import datetime, timedelta
 import sqlite3
 import uuid
@@ -12,6 +13,7 @@ import subprocess
 import io
 import json
 
+# Optional libs
 STREAMLIT_AVAILABLE = True
 try:
     import streamlit as st
@@ -33,6 +35,7 @@ except Exception:
 
 import pandas as pd
 
+# ----------------- Config -----------------
 DB_FILE = "mindcheck_single_improved.db"
 SIMULATION_MODE = True
 DEFAULT_USER_ID = str(uuid.uuid4())[:6]
@@ -40,11 +43,12 @@ ALERT_HR = 110
 ALERT_HRV = 25
 ALERT_MOOD = -1.5
 
+# Mood check intervals in minutes
 MOOD_CHECK_INTERVALS = {
-    'frequent': 30,    
-    'normal': 60,      
-    'relaxed': 120,    
-    'minimal': 240    
+    'frequent': 30,    # Every 30 minutes
+    'normal': 60,      # Every hour
+    'relaxed': 120,    # Every 2 hours
+    'minimal': 240     # Every 4 hours
 }
 
 EMOJI_LABELS = {
@@ -88,6 +92,8 @@ ENCOURAGEMENT_FEEDBACK = [
     "Cada pequeno passo importa. Continue! 👣",
     "Respire fundo - você já superou desafios antes! 🌬️"
 ]
+
+# --------------- Database -----------------
 
 def init_db(path=DB_FILE):
     conn = sqlite3.connect(path, check_same_thread=False)
@@ -133,8 +139,10 @@ def init_db(path=DB_FILE):
 
 conn = init_db()
 
+# --------------- System Notifications ----------------
+
 def show_system_notification(title, message):
-"""Show system notification (works on Windows, macOS, Linux)"""
+    """Show system notification (works on Windows, macOS, Linux)"""
     try:
         if sys.platform == "win32":
             subprocess.Popen(['powershell', '-WindowStyle', 'Hidden', '-Command',
@@ -151,6 +159,8 @@ def show_popup_reminder(user_id):
     message = "💭 Hora do check-in de humor! Como você está se sentindo agora?"
     show_system_notification("MindCheck - Lembrete", message)
     create_reminder(user_id, 'periodic_check', message)
+
+# --------------- Settings Management ----------------
 
 def get_user_settings(user_id):
     c = conn.cursor()
@@ -186,10 +196,13 @@ def save_user_settings(settings):
                settings['last_mood_check']))
     conn.commit()
 
+# --------------- Sentiment (improved with robust fallbacks) -----------------
+
 def load_sentiment():
     if not TRANSFORMERS_AVAILABLE:
         return None
 
+    # Prefer a Portuguese-capable model if available, then multilingual models
     candidates = [
         'pierreguillou/bert-base-cased-sentiment-portuguese',
         'nlptown/bert-base-multilingual-uncased-sentiment',
@@ -219,8 +232,10 @@ def analyze_sentiment(text):
             out = sentiment_model['pipe'](text)
             if isinstance(out, list) and len(out) > 0:
                 o = out[0]
+                # Hugging Face pipelines vary: some return {'label':'POSITIVE','score':0.99}, others give 'stars'
                 label = o.get('label', '').lower()
                 score = float(o.get('score', 0.5))
+                # Map labels to 0..1 more robustly
                 if 'neg' in label or '1' in label:
                     return max(0.0, min(1.0, 0.1 * score + 0.0))
                 if 'neu' in label or 'mixed' in label:
@@ -231,6 +246,7 @@ def analyze_sentiment(text):
                 return max(0.0, min(1.0, score))
         except Exception:
             pass
+    # Fallback heuristic for Portuguese/Brazilian Portuguese
     lower = text.lower()
     neg_words = ['triste', 'cansad', 'estress', 'ansios', 'mau', 'ruim', 'difícil', 'problema', 'deprim', 'sofr', 'solit']
     pos_words = ['bem', 'feliz', 'ótimo', 'excelente', 'maravilha', 'content', 'alegr', 'animad', 'gratid']
@@ -243,6 +259,8 @@ def analyze_sentiment(text):
     elif pos and neg:
         return 0.5
     return 0.5
+
+# ------------- Reminder System -------------
 
 def create_reminder(user_id, reminder_type, message):
     c = conn.cursor()
@@ -294,6 +312,8 @@ def check_reminders_needed(user_id):
             reminders.append(("activity_reminder", "🚶‍♂️ Pouca atividade hoje. Uma pequena caminhada pode ajudar!"))
 
     return reminders
+
+# ------------- Periodic Mood Check System -------------
 
 class MoodCheckScheduler:
     def __init__(self):
@@ -560,6 +580,7 @@ def export_all_data_json(user_id):
     json_bytes = json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8')
     return json_bytes, meta
 
+# ------------- Streamlit UI (single-file) -------------
 
 def run_streamlit():
     st.set_page_config(page_title='MindCheck Single — Improved', layout='wide', initial_sidebar_state='expanded')
@@ -581,6 +602,7 @@ def run_streamlit():
         mood_scheduler.start(user_id)
         st.session_state.scheduler_started = True
 
+    # Top-level header + compact controls
     header_col1, header_col2 = st.columns([3,1])
     with header_col1:
         st.title('🧠 MindCheck — Monitor de Bem-Estar')
@@ -593,12 +615,14 @@ def run_streamlit():
     show_reminders(user_id)
     quick_mood_check_modal_streamlit()
 
+    # Auto-check for new reminders (every 30 minutes)
     if st.session_state.last_check is None or (datetime.now() - st.session_state.last_check).seconds > 1800:
         needed_reminders = check_reminders_needed(user_id)
         for reminder_type, message in needed_reminders:
             create_reminder(user_id, reminder_type, message)
         st.session_state.last_check = datetime.now()
 
+    # Sidebar
     with st.sidebar:
         st.header('Conta')
         user_id = st.text_input('Seu ID anônimo', value=user_id)
@@ -631,8 +655,10 @@ def run_streamlit():
         json_bytes, meta_json = export_all_data_json(user_id)
         st.download_button('📥 Exportar JSON', data=json_bytes, file_name=f'mindcheck_export_{user_id}.json', mime='application/json')
 
+    # Main tabs with friendly cards
     tabs = st.tabs(['Visão Geral','Check de Humor','Fisiologia','Histórico','Lembretes','Configurações'])
 
+    # Visão Geral
     with tabs[0]:
         st.subheader('Sugestão do Dia')
         st.info(random.choice(WELLNESS_TIPS))
@@ -645,6 +671,7 @@ def run_streamlit():
         cols[2].metric('😴 Sono (h)', phys.get('sleep_hours','—'))
         cols[3].metric('⚖️ Estresse', f"{phys.get('stress_index',0)*100:.0f}%")
 
+    # Check de Humor
     with tabs[1]:
         st.header('Check de Humor')
         left, right = st.columns([1,2])
@@ -673,6 +700,7 @@ def run_streamlit():
         with right:
             st.text_area('Descreva como se sente (opcional)', key='detailed_text', height=200)
 
+    # Fisiologia
     with tabs[2]:
         st.header('Fisiologia (simulada)')
         source = st.selectbox('Fonte simulada', ['fitbit','googlefit','apple'])
@@ -694,6 +722,7 @@ def run_streamlit():
         data = recent_physio_summary(user_id) or fetch_wearable(user_id, source)
         st.json(data)
 
+    # Histórico
     with tabs[3]:
         st.header('Histórico e Progresso')
         c = conn.cursor()
@@ -722,6 +751,7 @@ def run_streamlit():
         else:
             st.info('📝 Sem registros ainda — faça seu primeiro check-in!')
 
+    # Lembretes
     with tabs[4]:
         st.header('Gestão de Lembretes')
         reminders = get_pending_reminders(user_id)
@@ -740,6 +770,7 @@ def run_streamlit():
             create_reminder(user_id, 'personal', reminder_text)
             st.success('✅ Lembrete agendado!')
 
+    # Configurações
     with tabs[5]:
         st.header('Configurações')
         settings = get_user_settings(user_id)
@@ -770,6 +801,7 @@ def run_streamlit():
             mood_scheduler.start(user_id)
             st.success('🔄 Agendador reiniciado!')
 
+# Streamlit quick modal (adapted)
 
 def quick_mood_check_modal_streamlit():
     if STREAMLIT_AVAILABLE and st.session_state.get('show_quick_check'):
@@ -807,6 +839,7 @@ def _process_quick_mood_streamlit(emoji, default_text):
     save_user_settings(settings)
     st.success('✅ Check-in registrado!')
 
+# ------------- CLI fallback (with JSON export) -------------
 
 def run_cli():
     print('Modo CLI: Streamlit não está disponível.')
@@ -881,6 +914,7 @@ def run_cli():
         else:
             print('❌ Opção inválida')
 
+# ------------- Entrypoint -------------
 if __name__ == '__main__':
     try:
         if STREAMLIT_AVAILABLE:
@@ -898,4 +932,3 @@ if __name__ == '__main__':
         mood_scheduler.stop()
     finally:
         mood_scheduler.stop()
-
